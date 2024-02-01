@@ -430,6 +430,7 @@ func (m *Map) Swap(key, value any) (previous any, loaded bool) {
 		}
 	} else {
 		if !read.amended {
+			// dirty map和read map都没有
 			// We're adding the first new key to the dirty map.
 			// Make sure it is allocated and mark the read-only map as incomplete.
 			m.dirtyLocked()
@@ -479,13 +480,16 @@ func (m *Map) CompareAndSwap(key, old, new any) bool {
 
 // CompareAndDelete deletes the entry for key if its value is equal to old.
 // The old value must be of a comparable type.
+// CompareAndDelete 如果键的值等于 old，则删除键的条目。可以理解为确认你要删除的值是不是你想要删除的
 //
 // If there is no current value for key in the map, CompareAndDelete
 // returns false (even if the old value is the nil interface value).
+// 如果 map 中没有键的当前值，则 CompareAndDelete 返回 false（即使旧值是 nil interface{} 值）。
 func (m *Map) CompareAndDelete(key, old any) (deleted bool) {
 	read := m.loadReadOnly()
 	e, ok := read.m[key]
 	if !ok && read.amended {
+		// read map 中没有这个键, 但是dirty map中可能有
 		m.mu.Lock()
 		read = m.loadReadOnly()
 		e, ok = read.m[key]
@@ -494,10 +498,13 @@ func (m *Map) CompareAndDelete(key, old any) (deleted bool) {
 			// Don't delete key from m.dirty: we still need to do the “compare” part
 			// of the operation. The entry will eventually be expunged when the
 			// dirty map is promoted to the read map.
+			// 不要从 m.dirty 中删除键：我们仍然需要执行操作的“比较”部分。
+			// 当 dirty map 提升为 read map 时，该条目最终将被删除。
 			//
 			// Regardless of whether the entry was present, record a miss: this key
 			// will take the slow path until the dirty map is promoted to the read
 			// map.
+			// 无论条目是否存在，都记录一个 miss：直到 dirty map 提升为 read map，否则该键将采用慢路径。
 			m.missLocked()
 		}
 		m.mu.Unlock()
@@ -507,6 +514,7 @@ func (m *Map) CompareAndDelete(key, old any) (deleted bool) {
 		if p == nil || p == expunged || *p != old {
 			return false
 		}
+		// 删除即为将p置为nil
 		if e.p.CompareAndSwap(p, nil) {
 			return true
 		}
@@ -516,26 +524,35 @@ func (m *Map) CompareAndDelete(key, old any) (deleted bool) {
 
 // Range calls f sequentially for each key and value present in the map.
 // If f returns false, range stops the iteration.
+// Range 依次为 map 中存在的每个键和值调用 f。
 //
 // Range does not necessarily correspond to any consistent snapshot of the Map's
 // contents: no key will be visited more than once, but if the value for any key
 // is stored or deleted concurrently (including by f), Range may reflect any
 // mapping for that key from any point during the Range call. Range does not
 // block other methods on the receiver; even f itself may call any method on m.
+// Range 不一定对应于 map 内容的任何一致快照：不会访问任何键超过一次，
+// 但是如果任何键的值同时存储或删除（包括 f），则 Range 可以反映 Range 调用期间该键的任何点的任何映射。
+// Range 不会阻止接收器上的其他方法；即使 f 本身也可以调用 m 上的任何方法。
 //
 // Range may be O(N) with the number of elements in the map even if f returns
 // false after a constant number of calls.
+// Range 可能是 O(N)，其中 N 是 map 中的元素数量，即使 f 在恒定数量的调用后返回 false。
 func (m *Map) Range(f func(key, value any) bool) {
 	// We need to be able to iterate over all of the keys that were already
 	// present at the start of the call to Range.
+	// 我们需要能够迭代调用 Range 时已经存在的所有键。
 	// If read.amended is false, then read.m satisfies that property without
 	// requiring us to hold m.mu for a long time.
+	// 如果 read.amended 为 false，则 read.m 满足该属性，而无需我们长时间持有m.mu(因为不需要访问dirty map)
 	read := m.loadReadOnly()
 	if read.amended {
 		// m.dirty contains keys not in read.m. Fortunately, Range is already O(N)
 		// (assuming the caller does not break out early), so a call to Range
 		// amortizes an entire copy of the map: we can promote the dirty copy
 		// immediately!
+		// m.dirty 包含不在 read.m 中的键。幸运的是，Range 已经是 O(N)（假设调用者没有提前退出），
+		// 因此对 Range 的调用会分摊整个 map 的复制：我们可以立即提升 dirty map 的副本！
 		m.mu.Lock()
 		read = m.loadReadOnly()
 		if read.amended {
@@ -568,6 +585,7 @@ func (m *Map) missLocked() {
 	m.misses = 0
 }
 
+// dirtyLocked 将 m.dirty 初始化为 m.read 的副本, 标记删除的忽略。
 func (m *Map) dirtyLocked() {
 	if m.dirty != nil {
 		return
@@ -582,8 +600,11 @@ func (m *Map) dirtyLocked() {
 	}
 }
 
+// tryExpungeLocked 将条目标记为删除，以便在下次加载时将其复制到 dirty map 中。
 func (e *entry) tryExpungeLocked() (isExpunged bool) {
 	p := e.p.Load()
+	// 如果是nil, 则标记为删除
+	// 否则判断是否是expunged, 如果是则返回true
 	for p == nil {
 		if e.p.CompareAndSwap(nil, expunged) {
 			return true
