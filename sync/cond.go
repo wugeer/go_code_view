@@ -142,6 +142,7 @@ func (c *copyChecker) check() {
 // for details.
 //
 // Note that it must not be embedded, due to the Lock and Unlock methods.
+// 如果想要在go vet中检查是否变量发生过拷贝，那么嵌入这个noCopy类型即可
 type noCopy struct{}
 
 // Lock is a no-op used by -copylocks checker from `go vet`.
